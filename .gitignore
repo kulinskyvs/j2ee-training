@@ -3,3 +3,11 @@
 build
 *~
 
+#eclipse
+.project
+.classpath
+
+#idea
+.idea
+*.iml
+

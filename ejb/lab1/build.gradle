@@ -1,34 +1,23 @@
-apply plugin: 'eclipse'
+apply plugin: 'java'
 
+version 1.0
+archivesBaseName = "timeservice-ejb"
 
 ext {
     glassfish_home = "$System.env.GLASSFISH_HOME${File.separator}glassfish"
-    glassfish_bin  = "$System.env.GLASSFISH_HOME${File.separator}glassfish${File.separator}bin"
-    glassfish_lib  = "$System.env.GLASSFISH_HOME${File.separator}glassfish${File.separator}lib"
+    glassfish_bin  = "${glassfish_home}${File.separator}bin"
+    glassfish_lib  = "${glassfish_home}${File.separator}lib"
+
+    application_name = 'TimeService'
+    app_client_main_class = 'org.training.ejb30.client.ClientACC'
+    app_client_jar_file = 'TimeServiceClient.jar'
 }
 
+task wrapper(type: Wrapper) {
+    gradleVersion = '1.11'
+}
 
-subprojects {
-  apply plugin: 'java'
-  version 1.0
-
-  repositories {
-//    mavenCentral()
-     flatDir {
-        dirs glassfish_lib
-     }
-  }
-
-  dependencies {
-//    compile 'javax:javaee-api:6.0'
-    compile 'org.glassfish.main.extras:javaee:3.1.2.2'
-    compile 'org.glassfish.main.extras:appserv-rt:3.1.2.2'            
-
-    runtime 'org.glassfish.main.extras:javaee:3.1.2.2'
-    runtime 'org.glassfish.main.extras:appserv-rt:3.1.2.2'            
-  }
-
-  task asadmin(type:Exec) {
+task asadmin(type:Exec) {
     workingDir glassfish_bin
 
     if (System.properties['os.name'].toLowerCase().contains('windows')) {
@@ -38,48 +27,93 @@ subprojects {
     }
   }
 
+
+  repositories {
+    mavenCentral()
+
+     flatDir {
+        dirs glassfish_lib
+     }
+  }
+
+  dependencies {
+    compile 'javax:javaee-api:6.0'
+//    compile 'org.glassfish.main.extras:javaee:3.1.2.2'
+    compile 'org.glassfish.main.extras:appserv-rt:3.1.2.2'            
+
+//    runtime 'org.glassfish.main.extras:javaee:3.1.2.2'
+    runtime 'javax:javaee-api:6.0'
+    runtime 'org.glassfish.main.extras:appserv-rt:3.1.2.2'            
+  }
+
+
+task jar_server(type:Jar) {
+    //pack client jar to be executed via JNDI
+    baseName = "${archivesBaseName}-server"
+    includes = ['**/server/*']
+    from sourceSets.main.output
 }
 
-task deploy << {
-  project(':server').deploy
+task jar_client_jndi(type:Jar) {
+    //pack client jar to be executed via JNDI
+    baseName = "${archivesBaseName}-client-jndi"
+    includes = ['**/client/*']
+    excludes = ['**/*ACC.class']
+    from sourceSets.main.output
+}
+
+task jar_client_acc(type:Jar) {
+    //pack client jar to be executed via Application client container
+    baseName = "${archivesBaseName}-client-acc"
+    excludes = ['**/*JNDI.class']
+    excludes = ['**/*Bean.class']
+    from sourceSets.main.output
+    manifest {
+        attributes("Main-Class": "${app_client_main_class}")
+    }
+}
+
+jar {
+      dependsOn 'jar_server'
+      dependsOn 'jar_client_jndi'
+      dependsOn 'jar_client_acc'
+      baseName = "${application_name}"
+      extension = 'ear'
+      exclude "org"
+      from files(jar_server.archivePath, jar_client_acc.archivePath)
+}
+
+build.doLast {
+    asadmin.args "deploy", "--force=true", "--name=${application_name}", "${jar.archivePath}"
+    asadmin.execute()
 }
 
 task undeploy << {
-  project(':server').undeploy
+    asadmin.args "undeploy", "TimeService"
+    asadmin.execute()
 }
 
-task run_client << {
-  project(':client').run_client
-}
 
-//////////////////////////////////////////////////////////////////////
-project(':client') {
-  archivesBaseName = "timeservice-ejb-client"
-
-  dependencies {
-    compile project(':server')
-  }
-
-  task run_client(dependsOn: 'build', type:JavaExec) {
-    main = 'org.training.ejb30.client.Client'
+task client_jndi(dependsOn: 'build', type:JavaExec) {
+    main = 'org.training.ejb30.client.ClientJNDI'
     classpath = sourceSets.main.runtimeClasspath
-  }
 }
 
-//////////////////////////////////////////////////////////////////////
-project(':server') {
-  archivesBaseName = "timeservice-ejb-server"
 
-  task deploy(dependsOn: 'build') << {
-    asadmin.args "deploy", "--force=true", "--name=${jar.baseName}", "${jar.archivePath}"
+task extract_client_stub << {
+    asadmin.args "get-client-stubs", "--appname", "${application_name}", "${buildDir}"
     asadmin.execute()
- }
-
-  task undeploy << {
-    asadmin.args "undeploy", "${jar.baseName}"
-    asadmin.execute()
-  }
-
 }
 
+task client_acc(dependsOn: extract_client_stub, type:Exec) {
+    workingDir glassfish_bin
+
+    if (System.properties['os.name'].toLowerCase().contains('windows')) {
+      commandLine 'cmd', '/c', 'appclient.bat'
+    } else {
+      commandLine "./appclient"
+    }
+
+    args "-client", "${buildDir}/${app_client_jar_file}", "-mainClass", "${app_client_main_class}"
+}
 
